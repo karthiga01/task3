@@ -1,0 +1,87 @@
+# Install required packages
+!pip install fastapi uvicorn nest-asyncio pyngrok
+
+# Authenticate ngrok
+from getpass import getpass
+import os
+from pyngrok import ngrok
+
+NGROK_AUTH_TOKEN = getpass("Paste your ngrok authtoken here: 2xSfPpjgM7m8aGjaAk9tdSnAm5l_5YDHGkKrXGyTQEyrph6Pg ")
+os.environ["2xSfPpjgM7m8aGjaAk9tdSnAm5l_5YDHGkKrXGyTQEyrph6Pg"] = NGROK_AUTH_TOKEN
+ngrok.set_auth_token(NGROK_AUTH_TOKEN)
+
+# Set up and run FastAPI app
+import nest_asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+import uvicorn
+
+nest_asyncio.apply()
+
+app = FastAPI()
+clients = {}
+
+html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat</title>
+</head>
+<body>
+    <h1>WebSocket Chat</h1>
+    <input id="username" type="text" placeholder="Your Name"/><br>
+    <input id="messageText" type="text" placeholder="Type a message"/>
+    <button onclick="sendMessage()">Send</button>
+    <ul id='messages'></ul>
+    <script>
+        let ws;
+        document.getElementById("username").onchange = function() {
+            const name = document.getElementById("username").value;
+            if (name && !ws) {
+                ws = new WebSocket(`wss://${window.location.host}/ws/${name}`);
+                ws.onmessage = function(event) {
+                    const messages = document.getElementById('messages');
+                    const message = document.createElement('li');
+                    const content = document.createTextNode(event.data);
+                    message.appendChild(content);
+                    messages.appendChild(message);
+                };
+            }
+        };
+
+        function sendMessage() {
+            const input = document.getElementById("messageText");
+            if (ws && input.value) {
+                ws.send(input.value);
+                input.value = '';
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+@app.get("/")
+async def get():
+    return HTMLResponse(html)
+
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    await websocket.accept()
+    clients[client_id] = websocket
+    try:
+        while True:
+            data = await websocket.receive_text()
+            for client, conn in clients.items():
+                if client != client_id:
+                    await conn.send_text(f"{client_id}: {data}")
+    except WebSocketDisconnect:
+        del clients[client_id]
+        for conn in clients.values():
+            await conn.send_text(f"{client_id} left the chat")
+
+# Launch using ngrok
+public_url = ngrok.connect(8000, bind_tls=True)
+print(f"Chat is live at: {public_url}")
+
+uvicorn.run(app, host="0.0.0.0", port=8000)
